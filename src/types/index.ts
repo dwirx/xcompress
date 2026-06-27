@@ -24,6 +24,7 @@ export interface CompressFile {
   path: string;
   size: number;           // bytes — original
   compressedSize?: number; // bytes — after compression
+  outputPath?: string;     // bytes — path to final compressed file
   type: FileType;
   mimeType: string;
   extension: string;

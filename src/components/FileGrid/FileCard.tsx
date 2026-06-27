@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-// components/FileGrid/FileCard.tsx — v2 with reveal in Explorer
+// components/FileGrid/FileCard.tsx — v3 with Before/After & Open File
 // ═══════════════════════════════════════════════════════════════
 import React from 'react';
 import type { CompressFile } from '../../types';
@@ -54,6 +54,11 @@ const FolderIcon = () => (
     <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
   </svg>
 );
+const PlayIcon = () => (
+  <svg width="8" height="8" viewBox="0 0 24 24" fill="currentColor">
+    <polygon points="5 3 19 12 5 21 5 3"/>
+  </svg>
+);
 const PlayOverlayIcon = () => (
   <div style={{
     width: 36, height: 36,
@@ -98,7 +103,7 @@ interface FileCardProps {
 
 // ── Component ─────────────────────────────────────────────────
 const FileCard: React.FC<FileCardProps> = ({ file, onRemove, isSelected, onSelect }) => {
-  const { id, name, size, compressedSize, type, extension, status, progress, previewUrl, path } = file;
+  const { id, name, size, compressedSize, outputPath, type, extension, status, progress, previewUrl, path } = file;
   const savings = compressedSize ? getSavingsPct(size, compressedSize) : 0;
 
   const handleRemove = (e: React.MouseEvent) => { e.stopPropagation(); onRemove(id); };
@@ -107,7 +112,18 @@ const FileCard: React.FC<FileCardProps> = ({ file, onRemove, isSelected, onSelec
     e.stopPropagation();
     if (!isTauri()) return;
     const { invoke } = await import('@tauri-apps/api/core');
-    await invoke('reveal_in_explorer', { path }).catch(console.error);
+    await invoke('reveal_in_explorer', { path: outputPath || path }).catch(console.error);
+  };
+
+  const handleOpenFile = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!isTauri() || !outputPath) return;
+    try {
+      const { openPath } = await import('@tauri-apps/plugin-opener');
+      await openPath(outputPath);
+    } catch (err) {
+      console.error("Gagal membuka berkas:", err);
+    }
   };
 
   const PlaceholderIcon = type === 'video' ? VideoIcon
@@ -143,21 +159,23 @@ const FileCard: React.FC<FileCardProps> = ({ file, onRemove, isSelected, onSelec
       )}
 
       {/* Video play hint */}
-      {type === 'video' && (
+      {type === 'video' && status !== 'done' && (
         <div className="file-card__play"><PlayOverlayIcon /></div>
       )}
 
-      {/* Type + size tag */}
-      <div className="file-card__type-tag">
-        {extension.toUpperCase()} · {formatBytes(size)}
-      </div>
+      {/* Type + size tag (before compression) */}
+      {status !== 'done' && (
+        <div className="file-card__type-tag">
+          {extension.toUpperCase()} · {formatBytes(size)}
+        </div>
+      )}
 
       {/* Compressing overlay */}
       {status === 'compressing' && (
         <div className="file-card__progress-overlay">
           <ProgressRing progress={progress} />
           <div style={{ fontSize: '9px', color: 'rgba(255,255,255,0.5)', fontWeight: 500 }}>
-            Compressing…
+            Mengompresi…
           </div>
         </div>
       )}
@@ -175,11 +193,18 @@ const FileCard: React.FC<FileCardProps> = ({ file, onRemove, isSelected, onSelec
         <div className="savings-badge">-{savings}%</div>
       )}
 
-      {/* Reveal in Explorer (hover, done state) */}
+      {/* Action buttons (Reveal Folder + Open File) on hover */}
       {status === 'done' && (
-        <button className="file-card__reveal" onClick={handleReveal} type="button">
-          <FolderIcon /> Show
-        </button>
+        <div className="file-card__reveal-actions">
+          <button className="file-card__reveal" onClick={handleReveal} type="button" title="Buka folder tujuan">
+            <FolderIcon /> Folder
+          </button>
+          {outputPath && (
+            <button className="file-card__reveal file-card__reveal--play" onClick={handleOpenFile} type="button" title="Buka file hasil kompresi">
+              <PlayIcon /> Buka
+            </button>
+          )}
+        </div>
       )}
 
       {/* Remove button */}
@@ -195,9 +220,16 @@ const FileCard: React.FC<FileCardProps> = ({ file, onRemove, isSelected, onSelec
         </button>
       )}
 
-      {/* Footer: filename */}
+      {/* Footer: filename & size comparison */}
       <div className="file-card__footer">
-        <div className="file-card__name">{name}</div>
+        <div className="file-card__name" title={name}>{name}</div>
+        {status === 'done' && compressedSize && (
+          <div className="file-card__comparison">
+            <span className="file-card__original-size">{formatBytes(size)}</span>
+            <span className="file-card__arrow">→</span>
+            <span className="file-card__compressed-size">{formatBytes(compressedSize)}</span>
+          </div>
+        )}
       </div>
     </div>
   );

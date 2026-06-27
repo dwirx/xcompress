@@ -60,13 +60,13 @@ pub struct ProgressEvent {
     pub progress: f64,   // 0.0 – 100.0
     pub status: String,  // "compressing" | "done" | "error"
     pub compressed_size: Option<u64>,
+    pub output_path: Option<String>,
     pub error_msg: Option<String>,
 }
 
 // ─── Helper: find ffmpeg / ffprobe ────────────────────────────
 
 fn find_ffmpeg(app: &AppHandle) -> Option<PathBuf> {
-    // 1. Coba cari di folder resource dir (jika diletakkan di resource/bin/)
     if let Ok(res_dir) = app.path().resource_dir() {
         let local_path = res_dir.join("bin").join("ffmpeg.exe");
         if local_path.exists() {
@@ -77,7 +77,6 @@ fn find_ffmpeg(app: &AppHandle) -> Option<PathBuf> {
             return Some(local_path_root);
         }
     }
-    // 2. Fallback ke system PATH
     which::which("ffmpeg").ok()
 }
 
@@ -221,18 +220,20 @@ async fn compress_file(
         progress: 0.0,
         status: "compressing".into(),
         compressed_size: None,
+        output_path: None,
         error_msg: None,
     });
 
     let result = do_compress(&app, &request).await;
 
     match result {
-        Ok(compressed_size) => {
+        Ok((compressed_size, output_path)) => {
             let _ = app.emit("compress_progress", ProgressEvent {
                 id: id.clone(),
                 progress: 100.0,
                 status: "done".into(),
                 compressed_size: Some(compressed_size),
+                output_path: Some(output_path),
                 error_msg: None,
             });
             Ok(())
@@ -243,6 +244,7 @@ async fn compress_file(
                 progress: 0.0,
                 status: "error".into(),
                 compressed_size: None,
+                output_path: None,
                 error_msg: Some(e.clone()),
             });
             Err(e)
@@ -250,7 +252,7 @@ async fn compress_file(
     }
 }
 
-async fn do_compress(app: &AppHandle, req: &CompressRequest) -> Result<u64, String> {
+async fn do_compress(app: &AppHandle, req: &CompressRequest) -> Result<(u64, String), String> {
     match req.file_type.as_str() {
         "video" => compress_video(app, req).await,
         "gif"   => compress_gif(app, req).await,
@@ -262,7 +264,7 @@ async fn do_compress(app: &AppHandle, req: &CompressRequest) -> Result<u64, Stri
 
 // ── Video compression ─────────────────────────────────────────
 
-async fn compress_video(app: &AppHandle, req: &CompressRequest) -> Result<u64, String> {
+async fn compress_video(app: &AppHandle, req: &CompressRequest) -> Result<(u64, String), String> {
     let ffmpeg = find_ffmpeg(app).ok_or("FFmpeg not found in resources or PATH. Please install FFmpeg.")?;
     let duration = get_video_duration_secs(app, &req.input_path).await;
 
@@ -311,14 +313,16 @@ async fn compress_video(app: &AppHandle, req: &CompressRequest) -> Result<u64, S
 
     run_ffmpeg_with_progress(app, &req.id, ffmpeg, args, duration).await?;
 
-    std::fs::metadata(&out_path)
+    let size = std::fs::metadata(&out_path)
         .map(|m| m.len())
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+
+    Ok((size, out_path.to_string_lossy().into_owned()))
 }
 
 // ── GIF compression ───────────────────────────────────────────
 
-async fn compress_gif(app: &AppHandle, req: &CompressRequest) -> Result<u64, String> {
+async fn compress_gif(app: &AppHandle, req: &CompressRequest) -> Result<(u64, String), String> {
     let ffmpeg = find_ffmpeg(app).ok_or("FFmpeg not found. Please install FFmpeg.")?;
     let duration = get_video_duration_secs(app, &req.input_path).await;
 
@@ -346,14 +350,16 @@ async fn compress_gif(app: &AppHandle, req: &CompressRequest) -> Result<u64, Str
 
     let _ = std::fs::remove_file(&palette_path);
 
-    std::fs::metadata(&out_path)
+    let size = std::fs::metadata(&out_path)
         .map(|m| m.len())
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+
+    Ok((size, out_path.to_string_lossy().into_owned()))
 }
 
 // ── Image compression ─────────────────────────────────────────
 
-async fn compress_image(app: &AppHandle, req: &CompressRequest) -> Result<u64, String> {
+async fn compress_image(app: &AppHandle, req: &CompressRequest) -> Result<(u64, String), String> {
     let ffmpeg = find_ffmpeg(app).ok_or("FFmpeg not found. Please install FFmpeg.")?;
 
     let ext = match req.image_format.as_str() {
@@ -394,19 +400,22 @@ async fn compress_image(app: &AppHandle, req: &CompressRequest) -> Result<u64, S
         progress: 50.0,
         status: "compressing".into(),
         compressed_size: None,
+        output_path: None,
         error_msg: None,
     });
 
     run_ffmpeg_with_progress(app, &req.id, ffmpeg, args, None).await?;
 
-    std::fs::metadata(&out_path)
+    let size = std::fs::metadata(&out_path)
         .map(|m| m.len())
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+
+    Ok((size, out_path.to_string_lossy().into_owned()))
 }
 
 // ── PDF compression ───────────────────────────────────────────
 
-async fn compress_pdf(_app: &AppHandle, req: &CompressRequest) -> Result<u64, String> {
+async fn compress_pdf(_app: &AppHandle, req: &CompressRequest) -> Result<(u64, String), String> {
     let gs = which::which("gswin64c")
         .or_else(|_| which::which("gswin32c"))
         .or_else(|_| which::which("gs"))
@@ -442,9 +451,11 @@ async fn compress_pdf(_app: &AppHandle, req: &CompressRequest) -> Result<u64, St
         return Err("Ghostscript failed to compress PDF".into());
     }
 
-    std::fs::metadata(&out_path)
+    let size = std::fs::metadata(&out_path)
         .map(|m| m.len())
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+
+    Ok((size, out_path.to_string_lossy().into_owned()))
 }
 
 // ─── FFmpeg runner with progress events ──────────────────────
@@ -478,6 +489,7 @@ async fn run_ffmpeg_with_progress(
                 progress,
                 status: "compressing".into(),
                 compressed_size: None,
+                output_path: None,
                 error_msg: None,
             });
         }

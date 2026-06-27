@@ -28,6 +28,7 @@ interface ProgressEvent {
   progress: number;
   status: 'compressing' | 'done' | 'error';
   compressedSize?: number;
+  outputPath?: string;
   errorMsg?: string;
 }
 
@@ -75,7 +76,7 @@ export function useGpuDetect() {
 interface UseCompressorOptions {
   gpu: GpuInfo | null;
   onProgress: (id: string, progress: number) => void;
-  onDone: (id: string, compressedSize: number) => void;
+  onDone: (id: string, compressedSize: number, outputPath?: string) => void;
   onError: (id: string, msg: string) => void;
 }
 
@@ -90,7 +91,7 @@ export function useCompressor({ gpu, onProgress, onDone, onError }: UseCompresso
       if (payload.status === 'compressing') {
         onProgress(payload.id, payload.progress);
       } else if (payload.status === 'done') {
-        onDone(payload.id, payload.compressedSize ?? 0);
+        onDone(payload.id, payload.compressedSize ?? 0, payload.outputPath);
       } else if (payload.status === 'error') {
         onError(payload.id, payload.errorMsg ?? 'Unknown error');
       }

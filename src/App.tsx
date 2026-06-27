@@ -164,9 +164,9 @@ function App() {
     ));
   }, []);
 
-  const handleDone = useCallback((id: string, compressedSize: number) => {
+  const handleDone = useCallback((id: string, compressedSize: number, outputPath?: string) => {
     setFiles(prev => prev.map(f =>
-      f.id === id ? { ...f, status: 'done' as const, progress: 100, compressedSize } : f
+      f.id === id ? { ...f, status: 'done' as const, progress: 100, compressedSize, outputPath } : f
     ));
   }, []);
 
