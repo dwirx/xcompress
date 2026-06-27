@@ -1,0 +1,128 @@
+/* ═══════════════════════════════════════════════════════════════
+   TitleBar — Windows-style (right-side controls)
+   ═══════════════════════════════════════════════════════════════ */
+
+.titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 40px;
+  padding: 0 var(--space-4);
+  background: rgba(10, 10, 16, 0.92);
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+  position: relative;
+  z-index: var(--z-overlay);
+  /* Draggable region */
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+
+/* ── Left: App icon + title ─────────────────────────────────── */
+.titlebar__brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+  pointer-events: none;
+}
+
+.titlebar__app-icon {
+  width: 16px;
+  height: 16px;
+  background: var(--gradient-accent);
+  border-radius: var(--radius-xs);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.titlebar__title {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  letter-spacing: 0.02em;
+  font-style: normal;
+}
+
+/* ── Center: action buttons ─────────────────────────────────── */
+.titlebar__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.titlebar__icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: var(--transition-fast);
+}
+.titlebar__icon-btn:hover {
+  background: rgba(255,255,255,0.07);
+  color: var(--color-text-primary);
+}
+
+/* ── Right: Windows-style controls ─────────────────────────── */
+.titlebar__win-controls {
+  display: flex;
+  align-items: stretch;
+  height: 40px;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+  margin-right: calc(var(--space-4) * -1); /* bleed to edge */
+}
+
+.win-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 40px;
+  border: none;
+  background: transparent;
+  color: rgba(255,255,255,0.65);
+  cursor: pointer;
+  transition: background 0.1s ease, color 0.1s ease;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.win-btn:hover {
+  background: rgba(255,255,255,0.08);
+  color: rgba(255,255,255,0.95);
+}
+
+/* Close button — red on hover */
+.win-btn--close:hover {
+  background: #c42b1c;
+  color: #fff;
+}
+.win-btn--close:active {
+  background: #b01e10;
+}
+
+.win-btn--minimize:active,
+.win-btn--maximize:active {
+  background: rgba(255,255,255,0.14);
+}
+
+/* Windows control icons using Unicode — crisp, no SVG needed */
+.win-btn__icon {
+  font-family: 'Segoe MDL2 Assets', 'Segoe Fluent Icons', sans-serif;
+  font-size: 10px;
+  font-style: normal;
+  line-height: 1;
+  /* Fallback: use text symbols */
+}
