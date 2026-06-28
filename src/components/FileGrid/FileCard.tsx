@@ -1,11 +1,11 @@
 // ═══════════════════════════════════════════════════════════════
 // components/FileGrid/FileCard.tsx — v3 with Before/After & Open File
 // ═══════════════════════════════════════════════════════════════
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { CompressFile } from '../../types';
 import { formatBytes, getSavingsPct } from '../../types';
-import { getPreviewUrl, isTauri } from '../../hooks/useTauri';
+import { getPreviewUrl, isTauri, prepareVideoPreview } from '../../hooks/useTauri';
 
 // ── Icons ─────────────────────────────────────────────────────
 const VideoIcon = () => (
@@ -83,12 +83,20 @@ const PlayOverlayIcon = () => (
   </div>
 );
 
-const PreviewMedia: React.FC<{ src: string; type: CompressFile['type']; alt: string; className: string; controls?: boolean }> = ({
+const PreviewMedia: React.FC<{
+  src: string;
+  type: CompressFile['type'];
+  alt: string;
+  className: string;
+  controls?: boolean;
+  onError?: () => void;
+}> = ({
   src,
   type,
   alt,
   className,
   controls = false,
+  onError,
 }) => {
   if (type === 'video') {
     return (
@@ -99,11 +107,12 @@ const PreviewMedia: React.FC<{ src: string; type: CompressFile['type']; alt: str
         controls={controls}
         playsInline
         preload="metadata"
+        onError={onError}
       />
     );
   }
 
-  return <img className={className} src={src} alt={alt} loading="lazy" />;
+  return <img className={className} src={src} alt={alt} loading="lazy" onError={onError} />;
 };
 
 // ── Circular progress ring ────────────────────────────────────
@@ -154,9 +163,18 @@ const FileCard: React.FC<FileCardProps> = ({ file, onRemove, isSelected, onSelec
   } = file;
   const savings = compressedSize ? getSavingsPct(size, compressedSize) : 0;
   const [comparePosition, setComparePosition] = useState(50);
+  const [resolvedInputPreview, setResolvedInputPreview] = useState<string | undefined>(previewUrl);
   const [resolvedOutputPreview, setResolvedOutputPreview] = useState<string | undefined>(file.outputPreviewUrl);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+  const [isBuildingVideoPreview, setIsBuildingVideoPreview] = useState(false);
+  const [videoPreviewFailed, setVideoPreviewFailed] = useState(false);
   const canPreview = ['image', 'gif', 'video'].includes(type);
+
+  useEffect(() => {
+    setResolvedInputPreview(previewUrl);
+    setVideoPreviewFailed(false);
+    setIsBuildingVideoPreview(false);
+  }, [previewUrl]);
 
   useEffect(() => {
     let cancelled = false;
@@ -232,8 +250,25 @@ const FileCard: React.FC<FileCardProps> = ({ file, onRemove, isSelected, onSelec
 
   const handleOpenPreview = (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (previewUrl && canPreview) setIsPreviewOpen(true);
+    if (resolvedInputPreview && canPreview) setIsPreviewOpen(true);
   };
+
+  const handleVideoPreviewError = useCallback(() => {
+    if (type !== 'video' || isBuildingVideoPreview || videoPreviewFailed) return;
+    if (!isPreviewOpen) return;
+
+    setIsBuildingVideoPreview(true);
+    void prepareVideoPreview(path)
+      .then((url) => {
+        if (url) setResolvedInputPreview(url);
+        else setVideoPreviewFailed(true);
+      })
+      .catch((error) => {
+        console.error('Gagal membuat preview video:', error);
+        setVideoPreviewFailed(true);
+      })
+      .finally(() => setIsBuildingVideoPreview(false));
+  }, [isBuildingVideoPreview, isPreviewOpen, path, type, videoPreviewFailed]);
 
   useEffect(() => {
     if (!isPreviewOpen) return;
@@ -264,6 +299,28 @@ const FileCard: React.FC<FileCardProps> = ({ file, onRemove, isSelected, onSelec
     }
   };
 
+  const handleOpenOriginalFile = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!isTauri()) return;
+    try {
+      const { openPath } = await import('@tauri-apps/plugin-opener');
+      await openPath(path);
+    } catch (err) {
+      console.error("Gagal membuka berkas asli:", err);
+    }
+  };
+
+  const handleOpenCurrentFile = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!isTauri()) return;
+    try {
+      const { openPath } = await import('@tauri-apps/plugin-opener');
+      await openPath(outputPath || path);
+    } catch (err) {
+      console.error("Gagal membuka berkas:", err);
+    }
+  };
+
   const PlaceholderIcon = type === 'video' ? VideoIcon
     : type === 'pdf' ? PdfIcon
     : type === 'gif' ? GifIcon
@@ -276,7 +333,7 @@ const FileCard: React.FC<FileCardProps> = ({ file, onRemove, isSelected, onSelec
     status === 'error' ? 'file-card--error' : '',
   ].filter(Boolean).join(' ');
 
-  const previewModal = isPreviewOpen && previewUrl && typeof document !== 'undefined'
+  const previewModal = isPreviewOpen && resolvedInputPreview && typeof document !== 'undefined'
     ? createPortal(
       <div
         className="file-preview-modal"
@@ -294,14 +351,34 @@ const FileCard: React.FC<FileCardProps> = ({ file, onRemove, isSelected, onSelec
                 {status === 'done' && compressedSize ? ` · -${savings}%` : ''}
               </div>
             </div>
-            <button
-              className="file-preview-modal__close"
-              onClick={() => setIsPreviewOpen(false)}
-              type="button"
-              aria-label="Tutup preview"
-            >
-              <XIcon />
-            </button>
+            <div className="file-preview-modal__actions">
+              {type === 'video' && (
+                <button
+                  className="file-preview-modal__open-original"
+                  onClick={handleOpenOriginalFile}
+                  type="button"
+                >
+                  Buka Original
+                </button>
+              )}
+              {status === 'done' && outputPath && (
+                <button
+                  className="file-preview-modal__open-original"
+                  onClick={handleOpenCurrentFile}
+                  type="button"
+                >
+                  Buka Hasil
+                </button>
+              )}
+              <button
+                className="file-preview-modal__close"
+                onClick={() => setIsPreviewOpen(false)}
+                type="button"
+                aria-label="Tutup preview"
+              >
+                <XIcon />
+              </button>
+            </div>
           </div>
 
           {status === 'done' && resolvedOutputPreview ? (
@@ -319,7 +396,7 @@ const FileCard: React.FC<FileCardProps> = ({ file, onRemove, isSelected, onSelec
               onPointerCancel={handleComparePointerUp}
               onKeyDown={handleCompareKeyDown}
             >
-              <PreviewMedia src={previewUrl} type={type} alt={`${name} before`} className="file-preview-modal__media" controls={type === 'video'} />
+              <PreviewMedia src={resolvedInputPreview} type={type} alt={`${name} before`} className="file-preview-modal__media" controls={type === 'video'} onError={handleVideoPreviewError} />
               <div
                 className="file-preview-modal__compare-after"
                 style={{ clipPath: `inset(0 0 0 ${comparePosition}%)` }}
@@ -333,7 +410,15 @@ const FileCard: React.FC<FileCardProps> = ({ file, onRemove, isSelected, onSelec
             </div>
           ) : (
             <div className="file-preview-modal__single">
-              <PreviewMedia src={previewUrl} type={type} alt={name} className="file-preview-modal__media" controls={type === 'video'} />
+              <PreviewMedia src={resolvedInputPreview} type={type} alt={name} className="file-preview-modal__media" controls={type === 'video'} onError={handleVideoPreviewError} />
+              {isBuildingVideoPreview && (
+                <div className="file-preview-modal__video-state">Membuat preview video kompatibel...</div>
+              )}
+              {videoPreviewFailed && (
+                <div className="file-preview-modal__video-state file-preview-modal__video-state--error">
+                  Preview video tidak bisa dibuat. Gunakan tombol Buka setelah kompres selesai.
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -354,9 +439,9 @@ const FileCard: React.FC<FileCardProps> = ({ file, onRemove, isSelected, onSelec
       onKeyDown={(e) => e.key === 'Enter' && onSelect(id)}
     >
       {/* Thumbnail / Placeholder */}
-      {status === 'done' && previewUrl && resolvedOutputPreview && canPreview ? (
+      {status === 'done' && resolvedInputPreview && resolvedOutputPreview && canPreview ? (
         <div className="file-card__compare" onClick={handleOpenPreview} title="Preview besar">
-          <PreviewMedia src={previewUrl} type={type} alt={`${name} before`} className="file-card__thumb file-card__thumb--compare" />
+          <PreviewMedia src={resolvedInputPreview} type={type} alt={`${name} before`} className="file-card__thumb file-card__thumb--compare" onError={handleVideoPreviewError} />
           <div
             className="file-card__compare-after"
             style={{ clipPath: `inset(0 0 0 ${comparePosition}%)` }}
@@ -378,9 +463,12 @@ const FileCard: React.FC<FileCardProps> = ({ file, onRemove, isSelected, onSelec
             aria-label={`Compare before and after for ${name}`}
           />
         </div>
-      ) : previewUrl && canPreview ? (
+      ) : resolvedInputPreview && canPreview ? (
         <div className="file-card__preview-bg" onClick={handleOpenPreview} title="Preview besar">
-          <PreviewMedia src={previewUrl} type={type} alt={name} className="file-card__thumb" />
+          <PreviewMedia src={resolvedInputPreview} type={type} alt={name} className="file-card__thumb" onError={handleVideoPreviewError} />
+          {isBuildingVideoPreview && (
+            <div className="file-card__video-state">Membuat preview...</div>
+          )}
         </div>
       ) : (
         <div className="file-card__placeholder">
@@ -394,7 +482,7 @@ const FileCard: React.FC<FileCardProps> = ({ file, onRemove, isSelected, onSelec
         <div className="file-card__play"><PlayOverlayIcon /></div>
       )}
 
-      {previewUrl && canPreview && (
+      {resolvedInputPreview && canPreview && (
         <button
           className="file-card__preview-open"
           onClick={handleOpenPreview}

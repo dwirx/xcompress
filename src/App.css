@@ -463,6 +463,31 @@
   accent-color: var(--color-accent-primary);
 }
 
+.global-setting-row--stacked {
+  align-items: stretch;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.global-setting-range {
+  display: grid;
+  grid-template-columns: 1fr 32px;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.global-setting-range input[type="range"] {
+  width: 100%;
+  height: 4px;
+  flex: 1 1 auto;
+}
+
+.global-setting-range strong {
+  justify-self: end;
+  min-width: 28px;
+  text-align: right;
+}
+
 .global-settings-actions {
   display: flex;
   flex-wrap: wrap;

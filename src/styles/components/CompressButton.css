@@ -71,8 +71,13 @@
 
 /* Processing state */
 .compress-btn--processing {
-  background: linear-gradient(135deg, #374151, #1f2937);
-  box-shadow: none;
+  background: linear-gradient(135deg, #ef4444, #b91c1c);
+  box-shadow: 0 8px 32px rgba(239, 68, 68, 0.32);
+}
+
+.compress-btn--processing:hover {
+  background: linear-gradient(135deg, #f87171, #dc2626);
+  box-shadow: 0 10px 34px rgba(239, 68, 68, 0.46);
 }
 
 .compress-btn__spinner {

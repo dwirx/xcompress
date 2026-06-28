@@ -4,15 +4,25 @@
 // ═══════════════════════════════════════════════════════════════
 
 use serde::{Deserialize, Serialize};
-use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::sync::Mutex;
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+const CANCELLED_ERROR: &str = "Compression stopped.";
+
+#[derive(Default)]
+struct CompressionState {
+    active_pids: Mutex<HashMap<String, u32>>,
+    cancelled_ids: Mutex<HashSet<String>>,
+}
 
 // ─── Helper: create command without terminal window ───────────
 fn create_command<P: AsRef<Path>>(program: P) -> tokio::process::Command {
@@ -120,6 +130,18 @@ fn find_ghostscript() -> Option<PathBuf> {
 
 fn find_tool(candidates: &[&str]) -> Option<PathBuf> {
     candidates.iter().find_map(|candidate| which::which(candidate).ok())
+}
+
+fn preview_cache_key(path: &str) -> String {
+    let mut hasher = DefaultHasher::new();
+    path.hash(&mut hasher);
+    if let Ok(metadata) = std::fs::metadata(path) {
+        metadata.len().hash(&mut hasher);
+        if let Ok(modified) = metadata.modified() {
+            modified.hash(&mut hasher);
+        }
+    }
+    format!("{:016x}", hasher.finish())
 }
 
 // ─── Helper: get video duration via ffprobe ───────────────────
@@ -795,6 +817,10 @@ async fn compress_file(
     request: CompressRequest,
 ) -> Result<(), String> {
     let id = request.id.clone();
+    {
+        let state = app.state::<CompressionState>();
+        state.cancelled_ids.lock().await.remove(&id);
+    }
 
     let _ = app.emit("compress_progress", ProgressEvent {
         id: id.clone(),
@@ -820,10 +846,11 @@ async fn compress_file(
             Ok(())
         }
         Err(e) => {
+            let status = if e == CANCELLED_ERROR { "cancelled" } else { "error" };
             let _ = app.emit("compress_progress", ProgressEvent {
                 id: id.clone(),
                 progress: 0.0,
-                status: "error".into(),
+                status: status.into(),
                 compressed_size: None,
                 output_path: None,
                 error_msg: Some(e.clone()),
@@ -831,6 +858,38 @@ async fn compress_file(
             Err(e)
         }
     }
+}
+
+#[tauri::command]
+async fn cancel_compression(app: AppHandle, ids: Vec<String>) -> Result<(), String> {
+    let state = app.state::<CompressionState>();
+    let active = state.active_pids.lock().await;
+    let ids_to_cancel: Vec<String> = if ids.is_empty() {
+        active.keys().cloned().collect()
+    } else {
+        ids
+    };
+
+    let mut pids_to_kill = Vec::new();
+    for id in &ids_to_cancel {
+        if let Some(pid) = active.get(id) {
+            pids_to_kill.push((*pid, id.clone()));
+        }
+    }
+    drop(active);
+
+    {
+        let mut cancelled = state.cancelled_ids.lock().await;
+        for (_, id) in &pids_to_kill {
+            cancelled.insert(id.clone());
+        }
+    }
+
+    for (pid, _) in pids_to_kill {
+        kill_process_tree(pid).await?;
+    }
+
+    Ok(())
 }
 
 async fn do_compress(app: &AppHandle, req: &CompressRequest) -> Result<(u64, String), String> {
@@ -841,6 +900,30 @@ async fn do_compress(app: &AppHandle, req: &CompressRequest) -> Result<(u64, Str
         "pdf"   => compress_pdf(app, req).await,
         _       => Err(format!("Unsupported file type: {}", req.file_type)),
     }
+}
+
+async fn kill_process_tree(pid: u32) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = create_command("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = create_command("kill")
+            .args(["-TERM", &pid.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await;
+    }
+
+    Ok(())
 }
 
 // ── Video compression ─────────────────────────────────────────
@@ -894,7 +977,12 @@ async fn compress_video(app: &AppHandle, req: &CompressRequest) -> Result<(u64, 
         _      => "mp4",
     };
 
-    let out_path = derive_output_path(&req.input_path, &req.output_path, ext);
+    let out_path = derive_output_path_with_tag(
+        &req.input_path,
+        &req.output_path,
+        ext,
+        video_output_name_tag(req),
+    );
     if req.video_format == "MP4" || req.video_format == "MOV" {
         args.push("-movflags".into());
         args.push("+faststart".into());
@@ -1121,6 +1209,12 @@ async fn run_ffmpeg_with_progress(
         .spawn()
         .map_err(|e| format!("Failed to spawn FFmpeg: {}", e))?;
 
+    let pid = child.id();
+    if let Some(pid) = pid {
+        let state = app.state::<CompressionState>();
+        state.active_pids.lock().await.insert(id.to_string(), pid);
+    }
+
     let stderr = child.stderr.take().unwrap();
     let mut reader = BufReader::new(stderr).lines();
 
@@ -1143,6 +1237,14 @@ async fn run_ffmpeg_with_progress(
     }
 
     let status = child.wait().await.map_err(|e| e.to_string())?;
+    {
+        let state = app.state::<CompressionState>();
+        state.active_pids.lock().await.remove(id);
+        if state.cancelled_ids.lock().await.remove(id) {
+            return Err(CANCELLED_ERROR.into());
+        }
+    }
+
     if !status.success() {
         return Err(format!("FFmpeg exited with code {:?}", status.code()));
     }
@@ -1152,9 +1254,31 @@ async fn run_ffmpeg_with_progress(
 // ─── Helper: derive output path ───────────────────────────────
 
 fn derive_output_path(input: &str, output_dir: &str, ext: &str) -> PathBuf {
+    derive_output_path_with_tag(input, output_dir, ext, None)
+}
+
+fn video_output_name_tag(req: &CompressRequest) -> Option<String> {
+    if req.resolution == "Same as input" {
+        return None;
+    }
+
+    Some(
+        req.resolution
+            .to_lowercase()
+            .chars()
+            .filter(|ch| ch.is_ascii_alphanumeric())
+            .collect::<String>()
+    )
+}
+
+fn derive_output_path_with_tag(input: &str, output_dir: &str, ext: &str, tag: Option<String>) -> PathBuf {
     let input_path = Path::new(input);
     let stem = input_path.file_stem().unwrap_or_default();
-    let file_name = format!("{}_compressed.{}", stem.to_string_lossy(), ext);
+    let file_name = if let Some(tag) = tag.filter(|value| !value.is_empty()) {
+        format!("{}_{}_compressed.{}", stem.to_string_lossy(), tag, ext)
+    } else {
+        format!("{}_compressed.{}", stem.to_string_lossy(), ext)
+    };
 
     if output_dir.is_empty() || output_dir == "Same as input" {
         input_path.parent().unwrap_or(Path::new(".")).join(file_name)
@@ -1222,6 +1346,61 @@ async fn get_media_info(app: AppHandle, path: String) -> Result<MediaInfo, Strin
         .ok_or_else(|| "Unable to read media dimensions with FFprobe.".to_string())
 }
 
+#[tauri::command]
+async fn prepare_video_preview(app: AppHandle, path: String) -> Result<String, String> {
+    let ffmpeg = find_ffmpeg(&app).ok_or("FFmpeg not found. Cannot build video preview proxy.")?;
+    let cache_dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| e.to_string())?
+        .join("video-previews");
+    std::fs::create_dir_all(&cache_dir).map_err(|e| e.to_string())?;
+
+    let preview_path = cache_dir.join(format!("{}.mp4", preview_cache_key(&path)));
+    if preview_path.exists() && std::fs::metadata(&preview_path).map(|m| m.len()).unwrap_or(0) > 0 {
+        return Ok(preview_path.to_string_lossy().into_owned());
+    }
+
+    let temp_path = preview_path.with_extension("tmp.mp4");
+    let status = create_command(ffmpeg)
+        .args([
+            "-y",
+            "-i",
+            &path,
+            "-map",
+            "0:v:0",
+            "-t",
+            "20",
+            "-an",
+            "-vf",
+            "scale=1280:720:flags=lanczos:force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "26",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+            &temp_path.to_string_lossy(),
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !status.success() {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err("Cannot build a playable video preview for this file.".into());
+    }
+
+    std::fs::rename(&temp_path, &preview_path).map_err(|e| e.to_string())?;
+    Ok(preview_path.to_string_lossy().into_owned())
+}
+
 // ─── Command: has_ghostscript ─────────────────────────────────
 
 #[tauri::command]
@@ -1234,6 +1413,7 @@ fn has_ghostscript() -> bool {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(CompressionState::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -1241,11 +1421,13 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             detect_gpu,
             compress_file,
+            cancel_compression,
             pick_folder,
             reveal_in_explorer,
             get_file_size,
             expand_paths,
             get_media_info,
+            prepare_video_preview,
             has_ghostscript,
         ])
         .run(tauri::generate_context!())
@@ -1340,6 +1522,22 @@ mod tests {
             resolution_to_scale("720p"),
             Some("scale=1280:720:flags=lanczos:force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1".into())
         );
+    }
+
+    #[test]
+    fn video_resolution_is_added_to_output_name() {
+        let mut req = video_req("auto", "CRF", 24, 0);
+        req.input_path = r"C:\media\clip.mp4".into();
+        req.resolution = "1080p".into();
+
+        let output = derive_output_path_with_tag(
+            &req.input_path,
+            "",
+            "mp4",
+            video_output_name_tag(&req),
+        );
+
+        assert_eq!(output.file_name().unwrap().to_string_lossy(), "clip_1080p_compressed.mp4");
     }
 
     #[test]

@@ -26,7 +26,7 @@ async function tauriListen<T>(event: string, cb: (payload: T) => void) {
 interface ProgressEvent {
   id: string;
   progress: number;
-  status: 'compressing' | 'done' | 'error';
+  status: 'compressing' | 'done' | 'error' | 'cancelled';
   compressedSize?: number;
   outputPath?: string;
   errorMsg?: string;
@@ -87,6 +87,13 @@ export async function getPreviewUrl(path: string, type: CompressFile['type']): P
   return convertFileSrc(path);
 }
 
+export async function prepareVideoPreview(path: string): Promise<string | undefined> {
+  if (!isTauri()) return undefined;
+  const { convertFileSrc } = await import('@tauri-apps/api/core');
+  const previewPath = await tauriInvoke<string>('prepare_video_preview', { path });
+  return convertFileSrc(previewPath);
+}
+
 // ═══════════════════════════════════════════════════════════════
 // Hook: useGpuDetect
 // ═══════════════════════════════════════════════════════════════
@@ -125,9 +132,10 @@ interface UseCompressorOptions {
   onProgress: (id: string, progress: number) => void;
   onDone: (id: string, compressedSize: number, outputPath?: string) => void;
   onError: (id: string, msg: string) => void;
+  onCancelled: (id: string) => void;
 }
 
-export function useCompressor({ gpu, onProgress, onDone, onError }: UseCompressorOptions) {
+export function useCompressor({ gpu, onProgress, onDone, onError, onCancelled }: UseCompressorOptions) {
   const unlistenRef = useRef<(() => void) | null>(null);
 
   // Setup event listener
@@ -141,6 +149,8 @@ export function useCompressor({ gpu, onProgress, onDone, onError }: UseCompresso
         onDone(payload.id, payload.compressedSize ?? 0, payload.outputPath);
       } else if (payload.status === 'error') {
         onError(payload.id, payload.errorMsg ?? 'Unknown error');
+      } else if (payload.status === 'cancelled') {
+        onCancelled(payload.id);
       }
     }).then((fn) => { unlisten = fn; unlistenRef.current = fn; });
     return () => { unlisten?.(); };
@@ -182,7 +192,12 @@ export function useCompressor({ gpu, onProgress, onDone, onError }: UseCompresso
     });
   }, [gpu, onProgress, onDone, onError]);
 
-  return { compressFile };
+  const cancelCompression = useCallback(async (ids: string[] = []) => {
+    if (!isTauri()) return;
+    await tauriInvoke('cancel_compression', { ids });
+  }, []);
+
+  return { compressFile, cancelCompression };
 }
 
 // ── Mock for browser preview ──────────────────────────────────

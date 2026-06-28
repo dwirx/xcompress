@@ -11,6 +11,12 @@ const BoltIcon = () => (
   </svg>
 );
 
+const StopIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+    <rect x="6" y="6" width="12" height="12" rx="2" />
+  </svg>
+);
+
 // ── Overall progress bar ──────────────────────────────────────
 interface OverallProgressProps {
   progress: number;  // 0–100
@@ -45,6 +51,7 @@ interface CompressButtonProps {
   overallProgress: number;
   doneCount: number;
   onClick: () => void;
+  onStop: () => void;
 }
 
 // ── Component ─────────────────────────────────────────────────
@@ -54,8 +61,9 @@ const CompressButton: React.FC<CompressButtonProps> = ({
   overallProgress,
   doneCount,
   onClick,
+  onStop,
 }) => {
-  const disabled = fileCount === 0 || isCompressing;
+  const disabled = fileCount === 0 && !isCompressing;
 
   return (
     <div className="compress-btn-wrap">
@@ -71,15 +79,15 @@ const CompressButton: React.FC<CompressButtonProps> = ({
       <button
         id="btn-compress"
         className={`compress-btn${isCompressing ? ' compress-btn--processing' : ''}`}
-        onClick={onClick}
+        onClick={isCompressing ? onStop : onClick}
         disabled={disabled}
-        aria-label={isCompressing ? `Compressing, ${Math.round(overallProgress)}% complete` : `Compress ${fileCount} file${fileCount !== 1 ? 's' : ''}`}
+        aria-label={isCompressing ? `Stop compression, ${Math.round(overallProgress)}% complete` : `Compress ${fileCount} file${fileCount !== 1 ? 's' : ''}`}
         type="button"
       >
         {isCompressing ? (
           <>
-            <div className="compress-btn__spinner" />
-            Compressing…
+            <StopIcon />
+            Stop
           </>
         ) : (
           <>

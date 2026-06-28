@@ -69,11 +69,13 @@ interface HistoryItem {
 interface AppPrefs {
   restoreQueue: boolean;
   autoSelectNewFiles: boolean;
+  parallelJobs: number;
 }
 
 const DEFAULT_PREFS: AppPrefs = {
   restoreQueue: true,
   autoSelectNewFiles: true,
+  parallelJobs: 4,
 };
 
 function fileForStorage(file: CompressFile): PersistedFile {
@@ -99,6 +101,7 @@ function App() {
   const [isGlobalSettingsOpen, setIsGlobalSettingsOpen] = useState(false);
   const hasRestoredStateRef = useRef(false);
   const filesRef = useRef<CompressFile[]>([]);
+  const cancelRequestedRef = useRef(false);
 
   const gpu                   = useGpuDetect();
   const { pickFolder }        = useFolderPicker();
@@ -381,11 +384,18 @@ function App() {
     addToast(`Error: ${msg}`, 'error');
   }, [addToast]);
 
-  const { compressFile } = useCompressor({
+  const handleCancelled = useCallback((id: string) => {
+    setFiles(prev => prev.map(f =>
+      f.id === id ? { ...f, status: 'idle' as const, progress: 0, error: undefined } : f
+    ));
+  }, []);
+
+  const { compressFile, cancelCompression } = useCompressor({
     gpu,
     onProgress: handleProgress,
     onDone: handleDone,
     onError: handleError,
+    onCancelled: handleCancelled,
   });
 
   const doneFiles  = useMemo(() => files.filter(f => f.status === 'done'), [files]);
@@ -543,7 +553,9 @@ function App() {
     }
 
     setIsCompressing(true);
-    setActiveBatchIds(new Set(pendingFiles.map(file => file.id)));
+    cancelRequestedRef.current = false;
+    const batchIds = new Set(pendingFiles.map(file => file.id));
+    setActiveBatchIds(batchIds);
 
     setFiles(prev => prev.map(f =>
       pendingFiles.find(pf => pf.id === f.id)
@@ -555,28 +567,58 @@ function App() {
       ? settings.outputFolderPath
       : '';
 
-    const concurrency = Math.min(4, Math.max(2, Math.floor((navigator.hardwareConcurrency || 4) / 2)));
+    const concurrency = Math.min(
+      pendingFiles.length,
+      Math.max(1, Math.min(8, prefs.parallelJobs || 1))
+    );
     let nextIndex = 0;
     let successCount = 0;
 
     const worker = async () => {
-      while (nextIndex < pendingFiles.length) {
+      while (!cancelRequestedRef.current && nextIndex < pendingFiles.length) {
         const file = pendingFiles[nextIndex++];
         try {
           await compressFile(file, settings, outputDir);
-          successCount += 1;
+          if (!cancelRequestedRef.current) successCount += 1;
         } catch (e) {
-          handleError(file.id, String(e));
+          if (!cancelRequestedRef.current && String(e) !== 'Compression stopped.') {
+            handleError(file.id, String(e));
+          }
         }
       }
     };
 
     await Promise.all(Array.from({ length: Math.min(concurrency, pendingFiles.length) }, () => worker()));
 
+    if (cancelRequestedRef.current) {
+      setFiles(prev => prev.map(file =>
+        batchIds.has(file.id) && (file.status === 'queued' || file.status === 'compressing')
+          ? { ...file, status: 'idle' as const, progress: 0 }
+          : file
+      ));
+    }
+
     setIsCompressing(false);
     setActiveBatchIds(new Set());
-    addToast(`✓ ${successCount} dari ${pendingFiles.length} file berhasil dikompresi.`, successCount > 0 ? 'success' : 'error');
-  }, [files.length, isCompressing, selectedPendingFiles, settings, compressFile, handleError, addToast]);
+    addToast(
+      cancelRequestedRef.current
+        ? `Kompresi dihentikan. ${successCount} file sudah selesai.`
+        : `✓ ${successCount} dari ${pendingFiles.length} file berhasil dikompresi.`,
+      cancelRequestedRef.current ? 'warning' : (successCount > 0 ? 'success' : 'error')
+    );
+    cancelRequestedRef.current = false;
+  }, [files.length, isCompressing, selectedPendingFiles, settings, prefs.parallelJobs, compressFile, handleError, addToast]);
+
+  const handleStopCompress = useCallback(async () => {
+    if (!isCompressing) return;
+    cancelRequestedRef.current = true;
+    try {
+      await cancelCompression(Array.from(activeBatchIds));
+    } catch (error) {
+      console.error('Gagal menghentikan kompresi:', error);
+      addToast('Gagal menghentikan proses aktif.', 'error');
+    }
+  }, [activeBatchIds, addToast, cancelCompression, isCompressing]);
 
   return (
     <div className={`app ${isDragOver ? 'app--drag-over' : ''}`} role="application" aria-label="xCompress">
@@ -684,6 +726,7 @@ function App() {
               overallProgress={overallPct}
               doneCount={activeBatchDoneCount}
               onClick={handleCompress}
+              onStop={handleStopCompress}
             />
             {outputSummaryFile && (
               <div className="output-summary">
@@ -787,6 +830,23 @@ function App() {
                   checked={prefs.autoSelectNewFiles}
                   onChange={(e) => handlePrefsChange('autoSelectNewFiles', e.target.checked)}
                 />
+              </label>
+
+              <label className="global-setting-row global-setting-row--stacked">
+                <span>
+                  <strong>Parallel jobs</strong>
+                  <small>Jumlah file yang dikompres bersamaan. Turunkan jika laptop terasa berat.</small>
+                </span>
+                <div className="global-setting-range">
+                  <input
+                    type="range"
+                    min={1}
+                    max={8}
+                    value={prefs.parallelJobs}
+                    onChange={(e) => handlePrefsChange('parallelJobs', Number(e.target.value))}
+                  />
+                  <strong>{prefs.parallelJobs}</strong>
+                </div>
               </label>
 
               <div className="global-settings-actions">
