@@ -1,5 +1,5 @@
 import React from 'react';
-import type { CompressionSettings, GpuInfo, FileType } from '../../types';
+import type { CompressionSettings, GpuInfo, FileType, VideoEncoder } from '../../types';
 import '../../styles/components/SettingsPanel.css';
 
 interface SettingsPanelProps {
@@ -21,6 +21,10 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
   onChangeOutputFolder,
   fileTypesPresent = ['video', 'image'], // default fallback for preview
 }) => {
+  const showAllSettings = fileCount === 0;
+  const showVideoSettings = showAllSettings || fileTypesPresent.some(type => type === 'video' || type === 'gif');
+  const showImagePdfSettings = showAllSettings || fileTypesPresent.some(type => type === 'image' || type === 'pdf');
+
   return (
     <div className="settings-panel">
       {/* Queued Stats Section */}
@@ -80,6 +84,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
       </div>
 
       {/* Video settings */}
+      {showVideoSettings && (
       <div className="settings-section">
         <div className="settings-section__title">Pengaturan Video</div>
         
@@ -94,6 +99,22 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
             <option value="WebM">WebM (Optimal Web)</option>
             <option value="MKV">MKV</option>
             <option value="MOV">MOV (Original)</option>
+          </select>
+        </div>
+
+        <div className="settings-row" style={{ marginBottom: '8px' }}>
+          <span className="settings-label">Encoder</span>
+          <select
+            className="settings-select settings-select--wide"
+            value={settings.videoEncoder}
+            onChange={(e) => onSettingsChange('videoEncoder', e.target.value as VideoEncoder)}
+          >
+            <option value="auto">Auto Rekomendasi</option>
+            <option value="best">H.265 CPU - ukuran terbaik</option>
+            <option value="h265Cpu">H.265 CPU - stabil</option>
+            <option value="h265Gpu">H.265 GPU - cepat jika tersedia</option>
+            <option value="h264Gpu">H.264 GPU - tercepat</option>
+            <option value="h264Cpu">H.264 CPU - kompatibel</option>
           </select>
         </div>
 
@@ -127,13 +148,14 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
           <div style={{ marginTop: '8px' }}>
             <span className="settings-label" style={{ display: 'block', marginBottom: '6px' }}>Tingkat Kompresi</span>
             <div className="quality-presets">
-              {(['highest', 'high', 'balanced', 'small'] as const).map((preset) => {
+              {(['highest', 'high', 'balanced', 'small', 'tiny'] as const).map((preset) => {
                 const active = settings.qualityPreset === preset;
                 const labels = {
                   highest: { name: 'Super', sub: 'Min Loss' },
                   high: { name: 'Tinggi', sub: 'Bagus' },
                   balanced: { name: 'Medium', sub: 'Standard' },
-                  small: { name: 'Kecil', sub: 'Hemat' }
+                  small: { name: 'Kecil', sub: 'Hemat' },
+                  tiny: { name: 'Mini', sub: 'Paling kecil' }
                 };
                 return (
                   <button
@@ -178,8 +200,10 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
           </label>
         </div>
       </div>
+      )}
 
       {/* Image / PDF settings */}
+      {showImagePdfSettings && (
       <div className="settings-section">
         <div className="settings-section__title">Pengaturan Gambar & PDF</div>
         <div className="settings-row" style={{ marginBottom: '8px' }}>
@@ -221,6 +245,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
           </select>
         </div>
       </div>
+      )}
 
       {/* Output folder settings */}
       <div className="settings-section" style={{ borderBottom: 'none' }}>

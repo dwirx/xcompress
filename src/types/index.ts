@@ -6,16 +6,17 @@ export type FileType = 'video' | 'image' | 'gif' | 'pdf' | 'unknown';
 
 export type FileStatus = 'idle' | 'queued' | 'compressing' | 'done' | 'error';
 
-export type QualityPreset = 'highest' | 'high' | 'balanced' | 'small';
+export type QualityPreset = 'highest' | 'high' | 'balanced' | 'small' | 'tiny';
 
 export type VideoFormat = 'MP4' | 'MOV' | 'MKV' | 'WebM';
-export type ImageFormat = 'JPEG' | 'PNG' | 'WebP' | 'HEIC';
+export type ImageFormat = 'JPEG' | 'PNG' | 'WebP';
 export type VideoResolution = 'Same as input' | '4K' | '1080p' | '720p' | '480p';
 export type ImageQuality = 'Highest' | 'Good' | 'Balanced' | 'Small';
 export type PdfQuality = 'Highest' | 'Good' | 'Balanced' | 'Small';
 export type VideoQuality = 'CRF' | 'File size';
 export type OutputFolder = 'Same as input' | 'Desktop' | 'Custom';
 export type GpuType = 'nvidia' | 'intel' | 'amd' | 'cpu';
+export type VideoEncoder = 'auto' | 'best' | 'h265Cpu' | 'h265Gpu' | 'h264Gpu' | 'h264Cpu';
 
 // ── Individual compressed file ───────────────────────────────
 export interface CompressFile {
@@ -25,6 +26,11 @@ export interface CompressFile {
   size: number;           // bytes — original
   compressedSize?: number; // bytes — after compression
   outputPath?: string;     // bytes — path to final compressed file
+  outputPreviewUrl?: string;
+  width?: number;
+  height?: number;
+  compressedWidth?: number;
+  compressedHeight?: number;
   type: FileType;
   mimeType: string;
   extension: string;
@@ -47,6 +53,7 @@ export interface CompressionSettings {
   targetFileSizeKb: number;
   videoResolution: VideoResolution;
   videoFormat: VideoFormat;
+  videoEncoder: VideoEncoder;
   removeAudio: boolean;
 
   // Image
@@ -84,9 +91,10 @@ export const DEFAULT_SETTINGS: CompressionSettings = {
   outputFolderPath: '',
   removeInputFiles: false,
   videoQuality: 'CRF',
-  targetFileSizeKb: 2,
+  targetFileSizeKb: 50 * 1024,
   videoResolution: 'Same as input',
   videoFormat: 'MP4',
+  videoEncoder: 'auto',
   removeAudio: false,
   imageQuality: 'Good',
   imageFormat: 'JPEG',
@@ -110,9 +118,9 @@ export function getSavingsPct(original: number, compressed: number): number {
 }
 
 export function getFileType(mimeType: string, ext: string): FileType {
-  if (mimeType.startsWith('video/') || ['mp4','mov','mkv','webm','avi'].includes(ext)) return 'video';
+  if (mimeType.startsWith('video/') || ['mp4','mov','mkv','webm','avi','m4v','mpg','mpeg','3gp','mts','m2ts'].includes(ext)) return 'video';
   if (mimeType === 'image/gif' || ext === 'gif') return 'gif';
-  if (mimeType.startsWith('image/')) return 'image';
+  if (mimeType.startsWith('image/') || ['jpg','jpeg','png','webp','heic','heif','tif','tiff','bmp','dng','cr2','nef','arw','rw2','raf','orf'].includes(ext)) return 'image';
   if (mimeType === 'application/pdf' || ext === 'pdf') return 'pdf';
   return 'unknown';
 }

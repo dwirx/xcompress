@@ -1,10 +1,11 @@
 // ═══════════════════════════════════════════════════════════════
 // components/FileGrid/FileCard.tsx — v3 with Before/After & Open File
 // ═══════════════════════════════════════════════════════════════
-import React from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { CompressFile } from '../../types';
 import { formatBytes, getSavingsPct } from '../../types';
-import { isTauri } from '../../hooks/useTauri';
+import { getPreviewUrl, isTauri } from '../../hooks/useTauri';
 
 // ── Icons ─────────────────────────────────────────────────────
 const VideoIcon = () => (
@@ -59,6 +60,14 @@ const PlayIcon = () => (
     <polygon points="5 3 19 12 5 21 5 3"/>
   </svg>
 );
+const ExpandIcon = () => (
+  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="15 3 21 3 21 9"/>
+    <polyline points="9 21 3 21 3 15"/>
+    <line x1="21" y1="3" x2="14" y2="10"/>
+    <line x1="3" y1="21" x2="10" y2="14"/>
+  </svg>
+);
 const PlayOverlayIcon = () => (
   <div style={{
     width: 36, height: 36,
@@ -73,6 +82,29 @@ const PlayOverlayIcon = () => (
     </svg>
   </div>
 );
+
+const PreviewMedia: React.FC<{ src: string; type: CompressFile['type']; alt: string; className: string; controls?: boolean }> = ({
+  src,
+  type,
+  alt,
+  className,
+  controls = false,
+}) => {
+  if (type === 'video') {
+    return (
+      <video
+        className={className}
+        src={src}
+        muted
+        controls={controls}
+        playsInline
+        preload="metadata"
+      />
+    );
+  }
+
+  return <img className={className} src={src} alt={alt} loading="lazy" />;
+};
 
 // ── Circular progress ring ────────────────────────────────────
 const ProgressRing: React.FC<{ progress: number }> = ({ progress }) => {
@@ -103,10 +135,112 @@ interface FileCardProps {
 
 // ── Component ─────────────────────────────────────────────────
 const FileCard: React.FC<FileCardProps> = ({ file, onRemove, isSelected, onSelect }) => {
-  const { id, name, size, compressedSize, outputPath, type, extension, status, progress, previewUrl, path } = file;
+  const {
+    id,
+    name,
+    size,
+    compressedSize,
+    outputPath,
+    type,
+    extension,
+    status,
+    progress,
+    previewUrl,
+    path,
+    width,
+    height,
+    compressedWidth,
+    compressedHeight,
+  } = file;
   const savings = compressedSize ? getSavingsPct(size, compressedSize) : 0;
+  const [comparePosition, setComparePosition] = useState(50);
+  const [resolvedOutputPreview, setResolvedOutputPreview] = useState<string | undefined>(file.outputPreviewUrl);
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+  const canPreview = ['image', 'gif', 'video'].includes(type);
+
+  useEffect(() => {
+    let cancelled = false;
+    setResolvedOutputPreview(file.outputPreviewUrl);
+
+    if (!file.outputPreviewUrl && outputPath && canPreview) {
+      getPreviewUrl(outputPath, type).then((url) => {
+        if (!cancelled) setResolvedOutputPreview(url);
+      });
+    }
+
+    return () => { cancelled = true; };
+  }, [canPreview, file.outputPreviewUrl, outputPath, type]);
+
+  const dimensionLabel = useMemo(() => {
+    const shownWidth = status === 'done' ? (compressedWidth ?? width) : width;
+    const shownHeight = status === 'done' ? (compressedHeight ?? height) : height;
+    return shownWidth && shownHeight ? `${shownWidth}×${shownHeight}` : null;
+  }, [compressedHeight, compressedWidth, height, status, width]);
+  const outputExtension = useMemo(() => {
+    const outputName = outputPath?.split(/[\\/]/).pop();
+    return outputName?.includes('.') ? outputName.split('.').pop()?.toUpperCase() : extension.toUpperCase();
+  }, [extension, outputPath]);
+  const beforeLabel = `Before: ${formatBytes(size)}, ${extension.toUpperCase()}`;
+  const afterLabel = `After: ${formatBytes(compressedSize ?? size)}, ${outputExtension ?? extension.toUpperCase()}`;
 
   const handleRemove = (e: React.MouseEvent) => { e.stopPropagation(); onRemove(id); };
+
+  const setCompareFromPointer = (event: React.PointerEvent<HTMLElement>) => {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    if (bounds.width <= 0) return;
+    const nextPosition = ((event.clientX - bounds.left) / bounds.width) * 100;
+    setComparePosition(Math.min(100, Math.max(0, nextPosition)));
+  };
+
+  const handleComparePointerDown = (event: React.PointerEvent<HTMLElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setCompareFromPointer(event);
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const handleComparePointerMove = (event: React.PointerEvent<HTMLElement>) => {
+    if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+    setCompareFromPointer(event);
+  };
+
+  const handleComparePointerUp = (event: React.PointerEvent<HTMLElement>) => {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  };
+
+  const handleCompareKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowDown') {
+      event.preventDefault();
+      setComparePosition(position => Math.max(0, position - 2));
+    } else if (event.key === 'ArrowRight' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      setComparePosition(position => Math.min(100, position + 2));
+    } else if (event.key === 'Home') {
+      event.preventDefault();
+      setComparePosition(0);
+    } else if (event.key === 'End') {
+      event.preventDefault();
+      setComparePosition(100);
+    }
+  };
+
+  const handleOpenPreview = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (previewUrl && canPreview) setIsPreviewOpen(true);
+  };
+
+  useEffect(() => {
+    if (!isPreviewOpen) return;
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setIsPreviewOpen(false);
+    };
+
+    document.addEventListener('keydown', handleEscape);
+    return () => document.removeEventListener('keydown', handleEscape);
+  }, [isPreviewOpen]);
 
   const handleReveal = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -138,7 +272,74 @@ const FileCard: React.FC<FileCardProps> = ({ file, onRemove, isSelected, onSelec
     status === 'error' ? 'file-card--error' : '',
   ].filter(Boolean).join(' ');
 
+  const previewModal = isPreviewOpen && previewUrl && typeof document !== 'undefined'
+    ? createPortal(
+      <div
+        className="file-preview-modal"
+        onClick={() => setIsPreviewOpen(false)}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Preview ${name}`}
+      >
+        <div className="file-preview-modal__panel" onClick={(e) => e.stopPropagation()}>
+          <div className="file-preview-modal__header">
+            <div>
+              <div className="file-preview-modal__title">{name}</div>
+              <div className="file-preview-modal__meta">
+                {dimensionLabel ? `${dimensionLabel} · ` : ''}{formatBytes(compressedSize ?? size)}
+                {status === 'done' && compressedSize ? ` · -${savings}%` : ''}
+              </div>
+            </div>
+            <button
+              className="file-preview-modal__close"
+              onClick={() => setIsPreviewOpen(false)}
+              type="button"
+              aria-label="Tutup preview"
+            >
+              <XIcon />
+            </button>
+          </div>
+
+          {status === 'done' && resolvedOutputPreview ? (
+            <div
+              className="file-preview-modal__compare"
+              role="slider"
+              tabIndex={0}
+              aria-label={`Drag the slider to compare before and after for ${name}`}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={Math.round(comparePosition)}
+              onPointerDown={handleComparePointerDown}
+              onPointerMove={handleComparePointerMove}
+              onPointerUp={handleComparePointerUp}
+              onPointerCancel={handleComparePointerUp}
+              onKeyDown={handleCompareKeyDown}
+            >
+              <PreviewMedia src={previewUrl} type={type} alt={`${name} before`} className="file-preview-modal__media" controls={type === 'video'} />
+              <div
+                className="file-preview-modal__compare-after"
+                style={{ clipPath: `inset(0 0 0 ${comparePosition}%)` }}
+              >
+                <PreviewMedia src={resolvedOutputPreview} type={type} alt={`${name} after`} className="file-preview-modal__media" controls={type === 'video'} />
+              </div>
+              <div className="file-preview-modal__divider" style={{ left: `${comparePosition}%` }} />
+              <div className="file-preview-modal__label file-preview-modal__label--before">{beforeLabel}</div>
+              <div className="file-preview-modal__label file-preview-modal__label--after">{afterLabel}</div>
+              <div className="file-preview-modal__hint">Drag the slider to compare before and after</div>
+            </div>
+          ) : (
+            <div className="file-preview-modal__single">
+              <PreviewMedia src={previewUrl} type={type} alt={name} className="file-preview-modal__media" controls={type === 'video'} />
+            </div>
+          )}
+        </div>
+      </div>,
+      document.body
+    )
+    : null;
+
   return (
+    <>
     <div
       id={`file-card-${id}`}
       className={cardClass}
@@ -149,8 +350,34 @@ const FileCard: React.FC<FileCardProps> = ({ file, onRemove, isSelected, onSelec
       onKeyDown={(e) => e.key === 'Enter' && onSelect(id)}
     >
       {/* Thumbnail / Placeholder */}
-      {previewUrl ? (
-        <img className="file-card__thumb" src={previewUrl} alt={name} loading="lazy" />
+      {status === 'done' && previewUrl && resolvedOutputPreview && canPreview ? (
+        <div className="file-card__compare">
+          <PreviewMedia src={previewUrl} type={type} alt={`${name} before`} className="file-card__thumb file-card__thumb--compare" />
+          <div
+            className="file-card__compare-after"
+            style={{ clipPath: `inset(0 0 0 ${comparePosition}%)` }}
+          >
+            <PreviewMedia src={resolvedOutputPreview} type={type} alt={`${name} after`} className="file-card__thumb file-card__thumb--compare" />
+          </div>
+          <div className="file-card__compare-divider" style={{ left: `${comparePosition}%` }} />
+          <div className="file-card__compare-label file-card__compare-label--before">{beforeLabel}</div>
+          <div className="file-card__compare-label file-card__compare-label--after">{afterLabel}</div>
+          <input
+            className="file-card__compare-range"
+            type="range"
+            min={0}
+            max={100}
+            value={comparePosition}
+            onClick={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+            onChange={(e) => setComparePosition(Number(e.target.value))}
+            aria-label={`Compare before and after for ${name}`}
+          />
+        </div>
+      ) : previewUrl && canPreview ? (
+        <div className="file-card__preview-bg">
+          <PreviewMedia src={previewUrl} type={type} alt={name} className="file-card__thumb" />
+        </div>
       ) : (
         <div className="file-card__placeholder">
           <div className="file-card__placeholder-icon"><PlaceholderIcon /></div>
@@ -163,10 +390,28 @@ const FileCard: React.FC<FileCardProps> = ({ file, onRemove, isSelected, onSelec
         <div className="file-card__play"><PlayOverlayIcon /></div>
       )}
 
+      {previewUrl && canPreview && (
+        <button
+          className="file-card__preview-open"
+          onClick={handleOpenPreview}
+          type="button"
+          title="Preview besar"
+          aria-label={`Preview ${name}`}
+        >
+          <ExpandIcon />
+        </button>
+      )}
+
       {/* Type + size tag (before compression) */}
       {status !== 'done' && (
         <div className="file-card__type-tag">
           {extension.toUpperCase()} · {formatBytes(size)}
+        </div>
+      )}
+
+      {dimensionLabel && (
+        <div className="file-card__dimension-tag">
+          {dimensionLabel}
         </div>
       )}
 
@@ -192,6 +437,10 @@ const FileCard: React.FC<FileCardProps> = ({ file, onRemove, isSelected, onSelec
       {status === 'done' && savings > 0 && (
         <div className="savings-badge">-{savings}%</div>
       )}
+
+      <div className={`file-card__selection${isSelected ? ' file-card__selection--active' : ''}`} aria-hidden="true">
+        {isSelected && <CheckIcon />}
+      </div>
 
       {/* Action buttons (Reveal Folder + Open File) on hover */}
       {status === 'done' && (
@@ -232,6 +481,8 @@ const FileCard: React.FC<FileCardProps> = ({ file, onRemove, isSelected, onSelec
         )}
       </div>
     </div>
+    {previewModal}
+    </>
   );
 };
 

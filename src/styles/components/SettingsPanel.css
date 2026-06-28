@@ -146,6 +146,10 @@
   color: var(--color-text-primary);
 }
 
+.settings-select--wide {
+  max-width: 166px;
+}
+
 /* ── Input ──────────────────────────────────────────────────── */
 .settings-input {
   background: var(--color-bg-input);
@@ -273,7 +277,7 @@
 /* ── Quality Presets ────────────────────────────────────────── */
 .quality-presets {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: var(--space-1);
   margin-top: var(--space-2);
 }
@@ -306,14 +310,16 @@
 }
 
 .quality-preset-btn__label {
-  font-size: var(--font-size-xs);
+  font-size: 10px;
   font-weight: 600;
   font-style: normal;
 }
 .quality-preset-btn__sub {
-  font-size: 9px;
+  font-size: 8px;
   color: var(--color-text-tertiary);
   font-style: normal;
+  line-height: 1.1;
+  text-align: center;
 }
 .quality-preset-btn--active .quality-preset-btn__sub {
   color: var(--color-text-accent);

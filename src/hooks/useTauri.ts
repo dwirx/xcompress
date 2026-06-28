@@ -40,6 +40,53 @@ interface RustGpuInfo {
   available: boolean;
 }
 
+export interface MediaInfo {
+  width?: number;
+  height?: number;
+  duration?: number;
+}
+
+export interface QueuedFileInfo {
+  path: string;
+  name: string;
+  size: number;
+  fileType: CompressFile['type'];
+  extension: string;
+}
+
+export async function expandPaths(paths: string[]): Promise<QueuedFileInfo[]> {
+  if (!isTauri()) return [];
+  try {
+    return await tauriInvoke<QueuedFileInfo[]>('expand_paths', { paths });
+  } catch {
+    return [];
+  }
+}
+
+export async function getMediaInfo(path: string): Promise<MediaInfo | null> {
+  if (!isTauri()) return null;
+  try {
+    return await tauriInvoke<MediaInfo>('get_media_info', { path });
+  } catch {
+    return null;
+  }
+}
+
+export async function hasGhostscript(): Promise<boolean> {
+  if (!isTauri()) return true;
+  try {
+    return await tauriInvoke<boolean>('has_ghostscript');
+  } catch {
+    return false;
+  }
+}
+
+export async function getPreviewUrl(path: string, type: CompressFile['type']): Promise<string | undefined> {
+  if (!isTauri() || !['image', 'gif', 'video'].includes(type)) return undefined;
+  const { convertFileSrc } = await import('@tauri-apps/api/core');
+  return convertFileSrc(path);
+}
+
 // ═══════════════════════════════════════════════════════════════
 // Hook: useGpuDetect
 // ═══════════════════════════════════════════════════════════════
@@ -111,8 +158,9 @@ export function useCompressor({ gpu, onProgress, onDone, onError }: UseCompresso
     }
 
     const crf = settings.qualityPreset === 'highest' ? 18
-      : settings.qualityPreset === 'high'    ? 23
-      : settings.qualityPreset === 'balanced' ? 28 : 35;
+      : settings.qualityPreset === 'high'    ? 21
+      : settings.qualityPreset === 'balanced' ? 24
+      : settings.qualityPreset === 'small' ? 28 : 31;
 
     await tauriInvoke('compress_file', {
       request: {
@@ -129,7 +177,7 @@ export function useCompressor({ gpu, onProgress, onDone, onError }: UseCompresso
         imageQuality: settings.imageQuality,
         imageFormat: settings.imageFormat,
         pdfQuality: settings.pdfQuality,
-        encoder: gpu?.encoder ?? 'libx264',
+        encoder: settings.videoEncoder,
       },
     });
   }, [gpu, onProgress, onDone, onError]);
