@@ -44,6 +44,8 @@ interface Toast {
 
 let toastId = 0;
 const APP_STATE_STORAGE_KEY = 'xcompress.appState.v1';
+const HISTORY_STORAGE_KEY = 'xcompress.history.v1';
+const PREFS_STORAGE_KEY = 'xcompress.prefs.v1';
 
 type PersistedFile = Omit<CompressFile, 'previewUrl' | 'outputPreviewUrl'>;
 
@@ -52,6 +54,27 @@ interface PersistedAppState {
   settings: CompressionSettings;
   selectedFileIds: string[];
 }
+
+interface HistoryItem {
+  id: string;
+  name: string;
+  outputPath: string;
+  fileType: FileType;
+  originalSize: number;
+  compressedSize: number;
+  savedBytes: number;
+  completedAt: string;
+}
+
+interface AppPrefs {
+  restoreQueue: boolean;
+  autoSelectNewFiles: boolean;
+}
+
+const DEFAULT_PREFS: AppPrefs = {
+  restoreQueue: true,
+  autoSelectNewFiles: true,
+};
 
 function fileForStorage(file: CompressFile): PersistedFile {
   const { previewUrl: _previewUrl, outputPreviewUrl: _outputPreviewUrl, ...storedFile } = file;
@@ -70,7 +93,12 @@ function App() {
   const [isDragOver, setIsDragOver] = useState(false);
   const [selectedFileIds, setSelectedFileIds] = useState<Set<string>>(new Set());
   const [activeBatchIds, setActiveBatchIds] = useState<Set<string>>(new Set());
+  const [historyItems, setHistoryItems] = useState<HistoryItem[]>([]);
+  const [prefs, setPrefs] = useState<AppPrefs>(DEFAULT_PREFS);
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [isGlobalSettingsOpen, setIsGlobalSettingsOpen] = useState(false);
   const hasRestoredStateRef = useRef(false);
+  const filesRef = useRef<CompressFile[]>([]);
 
   const gpu                   = useGpuDetect();
   const { pickFolder }        = useFolderPicker();
@@ -80,6 +108,10 @@ function App() {
     setToasts(prev => [...prev, { id, message, type }]);
     setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4000);
   }, []);
+
+  useEffect(() => {
+    filesRef.current = files;
+  }, [files]);
 
   const handleFilesAdded = useCallback((newFiles: CompressFile[]) => {
     const hasPdf = newFiles.some(file => file.type === 'pdf');
@@ -95,7 +127,7 @@ function App() {
     setFiles(prev => {
       const existing = new Set(prev.map(f => `${f.path}-${f.size}`));
       const unique = newFiles.filter(f => !existing.has(`${f.path}-${f.size}`));
-      if (unique.length > 0) {
+      if (unique.length > 0 && prefs.autoSelectNewFiles) {
         setSelectedFileIds(current => {
           const next = new Set(current);
           unique.forEach(file => next.add(file.id));
@@ -104,7 +136,7 @@ function App() {
       }
       return [...prev, ...unique];
     });
-  }, [addToast]);
+  }, [addToast, prefs.autoSelectNewFiles]);
 
   const createFileFromQueuedInfo = useCallback(async (info: QueuedFileInfo, index: number): Promise<CompressFile> => {
     const mediaInfo = await getMediaInfo(info.path);
@@ -131,8 +163,20 @@ function App() {
 
     const restoreState = async () => {
       try {
+        const rawPrefs = localStorage.getItem(PREFS_STORAGE_KEY);
+        const restoredPrefs = rawPrefs ? { ...DEFAULT_PREFS, ...JSON.parse(rawPrefs) as Partial<AppPrefs> } : DEFAULT_PREFS;
+        setPrefs(restoredPrefs);
+
+        const rawHistory = localStorage.getItem(HISTORY_STORAGE_KEY);
+        if (rawHistory) {
+          const restoredHistory = JSON.parse(rawHistory);
+          if (Array.isArray(restoredHistory)) {
+            setHistoryItems(restoredHistory.slice(0, 100));
+          }
+        }
+
         const rawState = localStorage.getItem(APP_STATE_STORAGE_KEY);
-        if (!rawState) return;
+        if (!rawState || !restoredPrefs.restoreQueue) return;
 
         const saved = JSON.parse(rawState) as Partial<PersistedAppState>;
         if (saved.settings) {
@@ -181,6 +225,14 @@ function App() {
   useEffect(() => {
     if (!hasRestoredStateRef.current || isCompressing) return;
 
+    localStorage.setItem(PREFS_STORAGE_KEY, JSON.stringify(prefs));
+    localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(historyItems.slice(0, 100)));
+
+    if (!prefs.restoreQueue) {
+      localStorage.removeItem(APP_STATE_STORAGE_KEY);
+      return;
+    }
+
     const stateToSave: PersistedAppState = {
       files: files.map(fileForStorage),
       settings,
@@ -188,7 +240,7 @@ function App() {
     };
 
     localStorage.setItem(APP_STATE_STORAGE_KEY, JSON.stringify(stateToSave));
-  }, [files, isCompressing, selectedFileIds, settings]);
+  }, [files, historyItems, isCompressing, prefs, selectedFileIds, settings]);
 
   const addPathsFromTauri = useCallback(async (paths: string[]) => {
     const expanded = await expandPaths(paths);
@@ -281,11 +333,31 @@ function App() {
   }, []);
 
   const handleDone = useCallback((id: string, compressedSize: number, outputPath?: string) => {
+    const sourceFile = filesRef.current.find(file => file.id === id);
+
     setFiles(prev => prev.map(f =>
       f.id === id ? { ...f, status: 'done' as const, progress: 100, compressedSize, outputPath } : f
     ));
 
     if (outputPath) {
+      if (sourceFile) {
+        const historyItem: HistoryItem = {
+          id: `${id}-${Date.now()}`,
+          name: sourceFile.name,
+          outputPath,
+          fileType: sourceFile.type,
+          originalSize: sourceFile.size,
+          compressedSize,
+          savedBytes: Math.max(0, sourceFile.size - compressedSize),
+          completedAt: new Date().toISOString(),
+        };
+
+        setHistoryItems(prev => [
+          historyItem,
+          ...prev.filter(item => item.outputPath !== outputPath),
+        ].slice(0, 100));
+      }
+
       void (async () => {
         const info = await getMediaInfo(outputPath);
         const outputExt = outputPath.split('.').pop()?.toLowerCase() ?? '';
@@ -405,11 +477,40 @@ function App() {
     setSelectedFileIds(new Set());
   }, []);
 
-  const handleRevealOutputSummary = useCallback(async () => {
-    if (!isTauri() || !outputSummaryFile?.outputPath) return;
+  const revealPath = useCallback(async (path?: string) => {
+    if (!isTauri() || !path) return;
     const { invoke } = await import('@tauri-apps/api/core');
-    await invoke('reveal_in_explorer', { path: outputSummaryFile.outputPath }).catch(console.error);
-  }, [outputSummaryFile]);
+    await invoke('reveal_in_explorer', { path }).catch(console.error);
+  }, []);
+
+  const handleRevealOutputSummary = useCallback(async () => {
+    await revealPath(outputSummaryFile?.outputPath);
+  }, [outputSummaryFile, revealPath]);
+
+  const handleClearHistory = useCallback(() => {
+    setHistoryItems([]);
+    localStorage.removeItem(HISTORY_STORAGE_KEY);
+    addToast('Riwayat dibersihkan.', 'success');
+  }, [addToast]);
+
+  const handleResetSettings = useCallback(() => {
+    setSettings(DEFAULT_SETTINGS);
+    addToast('Pengaturan kompresi dikembalikan ke default.', 'success');
+  }, [addToast]);
+
+  const handleResetAppData = useCallback(() => {
+    handleClearFiles();
+    setHistoryItems([]);
+    setPrefs(DEFAULT_PREFS);
+    localStorage.removeItem(APP_STATE_STORAGE_KEY);
+    localStorage.removeItem(HISTORY_STORAGE_KEY);
+    localStorage.removeItem(PREFS_STORAGE_KEY);
+    addToast('Semua data aplikasi lokal dibersihkan.', 'success');
+  }, [addToast, handleClearFiles]);
+
+  const handlePrefsChange = useCallback(<K extends keyof AppPrefs>(key: K, value: AppPrefs[K]) => {
+    setPrefs(prev => ({ ...prev, [key]: value }));
+  }, []);
 
   const handleSettingsChange = useCallback(<K extends keyof CompressionSettings>(
     key: K, value: CompressionSettings[K]
@@ -489,8 +590,8 @@ function App() {
 
       <TitleBar
         onImport={() => document.getElementById('drop-zone')?.click()}
-        onOpenHistory={() => addToast('Fitur Riwayat akan hadir di v0.2', 'info')}
-        onOpenSettings={() => addToast('Fitur Pengaturan Global akan hadir di v0.2', 'info')}
+        onOpenHistory={() => setIsHistoryOpen(true)}
+        onOpenSettings={() => setIsGlobalSettingsOpen(true)}
       />
 
       <div className="app__body">
@@ -608,6 +709,95 @@ function App() {
           </div>
         </div>
       </div>
+
+      {isHistoryOpen && (
+        <div className="app-modal" role="dialog" aria-modal="true" aria-label="Riwayat kompresi" onClick={() => setIsHistoryOpen(false)}>
+          <div className="app-modal__panel app-modal__panel--wide" onClick={(e) => e.stopPropagation()}>
+            <div className="app-modal__header">
+              <div>
+                <h3>Riwayat</h3>
+                <p>{historyItems.length} hasil kompres tersimpan lokal</p>
+              </div>
+              <button className="app-modal__close" onClick={() => setIsHistoryOpen(false)} type="button">×</button>
+            </div>
+
+            <div className="history-list">
+              {historyItems.length === 0 ? (
+                <div className="history-empty">
+                  <strong>Belum ada riwayat</strong>
+                  <span>Hasil kompres yang selesai akan muncul di sini.</span>
+                </div>
+              ) : historyItems.map(item => (
+                <div className="history-item" key={item.id}>
+                  <div className="history-item__main">
+                    <strong title={item.name}>{item.name}</strong>
+                    <span>{new Date(item.completedAt).toLocaleString()} · {item.fileType.toUpperCase()}</span>
+                  </div>
+                  <div className="history-item__stats">
+                    <span>{formatBytes(item.originalSize)} → {formatBytes(item.compressedSize)}</span>
+                    <strong>Saved {formatBytes(item.savedBytes)}</strong>
+                  </div>
+                  <button className="history-item__open" onClick={() => revealPath(item.outputPath)} type="button">
+                    Open Folder
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            <div className="app-modal__footer">
+              <button className="toolbar-btn" onClick={handleClearHistory} disabled={historyItems.length === 0} type="button">
+                Clear History
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isGlobalSettingsOpen && (
+        <div className="app-modal" role="dialog" aria-modal="true" aria-label="Pengaturan global" onClick={() => setIsGlobalSettingsOpen(false)}>
+          <div className="app-modal__panel" onClick={(e) => e.stopPropagation()}>
+            <div className="app-modal__header">
+              <div>
+                <h3>Pengaturan Global</h3>
+                <p>Preferensi aplikasi dan penyimpanan lokal</p>
+              </div>
+              <button className="app-modal__close" onClick={() => setIsGlobalSettingsOpen(false)} type="button">×</button>
+            </div>
+
+            <div className="global-settings-list">
+              <label className="global-setting-row">
+                <span>
+                  <strong>Pulihkan antrean saat app dibuka</strong>
+                  <small>File, status, pilihan, dan output path tetap ada setelah app ditutup.</small>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={prefs.restoreQueue}
+                  onChange={(e) => handlePrefsChange('restoreQueue', e.target.checked)}
+                />
+              </label>
+
+              <label className="global-setting-row">
+                <span>
+                  <strong>Auto-select file baru</strong>
+                  <small>File yang baru ditambahkan langsung masuk batch compress.</small>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={prefs.autoSelectNewFiles}
+                  onChange={(e) => handlePrefsChange('autoSelectNewFiles', e.target.checked)}
+                />
+              </label>
+
+              <div className="global-settings-actions">
+                <button className="toolbar-btn" onClick={handleResetSettings} type="button">Reset Settings</button>
+                <button className="toolbar-btn" onClick={handleClearFiles} type="button">Clear Queue</button>
+                <button className="toolbar-btn toolbar-btn--danger" onClick={handleResetAppData} type="button">Reset App Data</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

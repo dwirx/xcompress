@@ -184,6 +184,10 @@ const FileCard: React.FC<FileCardProps> = ({ file, onRemove, isSelected, onSelec
   const afterLabel = `After: ${formatBytes(compressedSize ?? size)}, ${outputExtension ?? extension.toUpperCase()}`;
 
   const handleRemove = (e: React.MouseEvent) => { e.stopPropagation(); onRemove(id); };
+  const handleSelect = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onSelect(id);
+  };
 
   const setCompareFromPointer = (event: React.PointerEvent<HTMLElement>) => {
     const bounds = event.currentTarget.getBoundingClientRect();
@@ -351,7 +355,7 @@ const FileCard: React.FC<FileCardProps> = ({ file, onRemove, isSelected, onSelec
     >
       {/* Thumbnail / Placeholder */}
       {status === 'done' && previewUrl && resolvedOutputPreview && canPreview ? (
-        <div className="file-card__compare">
+        <div className="file-card__compare" onClick={handleOpenPreview} title="Preview besar">
           <PreviewMedia src={previewUrl} type={type} alt={`${name} before`} className="file-card__thumb file-card__thumb--compare" />
           <div
             className="file-card__compare-after"
@@ -375,7 +379,7 @@ const FileCard: React.FC<FileCardProps> = ({ file, onRemove, isSelected, onSelec
           />
         </div>
       ) : previewUrl && canPreview ? (
-        <div className="file-card__preview-bg">
+        <div className="file-card__preview-bg" onClick={handleOpenPreview} title="Preview besar">
           <PreviewMedia src={previewUrl} type={type} alt={name} className="file-card__thumb" />
         </div>
       ) : (
@@ -438,9 +442,15 @@ const FileCard: React.FC<FileCardProps> = ({ file, onRemove, isSelected, onSelec
         <div className="savings-badge">-{savings}%</div>
       )}
 
-      <div className={`file-card__selection${isSelected ? ' file-card__selection--active' : ''}`} aria-hidden="true">
+      <button
+        className={`file-card__selection${isSelected ? ' file-card__selection--active' : ''}`}
+        onClick={handleSelect}
+        type="button"
+        title={isSelected ? 'Unselect file' : 'Select file'}
+        aria-label={isSelected ? `Unselect ${name}` : `Select ${name}`}
+      >
         {isSelected && <CheckIcon />}
-      </div>
+      </button>
 
       {/* Action buttons (Reveal Folder + Open File) on hover */}
       {status === 'done' && (

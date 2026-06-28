@@ -332,10 +332,10 @@
   background: rgba(0, 0, 0, 0.42);
   border: 1px solid rgba(255, 255, 255, 0.16);
   color: white;
+  cursor: pointer;
   opacity: 0;
   transform: scale(0.82);
   transition: var(--transition-fast);
-  pointer-events: none;
   z-index: 15;
 }
 
@@ -354,6 +354,11 @@
   background: var(--color-accent-primary);
   border-color: rgba(255, 255, 255, 0.36);
   box-shadow: 0 0 12px rgba(99, 102, 241, 0.54);
+}
+
+.file-card__selection:hover {
+  background: rgba(99, 102, 241, 0.86);
+  border-color: rgba(255, 255, 255, 0.42);
 }
 
 .file-card__preview-open {
